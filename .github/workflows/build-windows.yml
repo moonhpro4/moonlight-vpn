@@ -1,0 +1,101 @@
+name: Build Moonlight VPN for Windows
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'windows/**'
+      - 'app/src/main/assets/vpns/**'
+      - '.github/workflows/build-windows.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python packages
+        run: python -m pip install -r windows/requirements.txt
+
+      # One copy of the .ovpn files for both apps: the Android assets folder.
+      - name: Bundle the .ovpn server files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path windows/assets/vpns | Out-Null
+          Copy-Item app/src/main/assets/vpns/*.ovpn windows/assets/vpns/
+          "Bundled $((Get-ChildItem windows/assets/vpns -Filter *.ovpn).Count) server files"
+
+      - name: Build the app (PyInstaller)
+        shell: pwsh
+        run: |
+          $assets = Join-Path $PWD.Path "windows\assets"
+          pyinstaller --noconfirm --clean --windowed --uac-admin `
+            --name MoonlightVPN `
+            --icon "$assets\icon.ico" `
+            --paths windows/app `
+            --hidden-import pystray._win32 `
+            --add-data "$assets;assets" `
+            --distpath windows/dist --workpath windows/build `
+            windows/app/main.py
+          if (-not (Test-Path windows/dist/MoonlightVPN/MoonlightVPN.exe)) { throw "PyInstaller did not produce MoonlightVPN.exe" }
+
+      # Best effort: bundle the OpenVPN engine into the installer. If this fails the installer uses winget instead.
+      - name: Download the OpenVPN engine installer (optional)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $base = "https://swupdate.openvpn.org/community/releases/"
+          $target = "windows/installer/openvpn.msi"
+          $urls = @("${base}OpenVPN-2.7.9-I001-amd64.msi")
+          try {
+            $html = (Invoke-WebRequest -UseBasicParsing $base).Content
+            $found = [regex]::Matches($html, 'OpenVPN-(\d+\.\d+\.\d+)-I\d+-amd64\.msi') |
+                     ForEach-Object { $_.Value } | Sort-Object -Unique |
+                     Sort-Object { [version]([regex]::Match($_, '\d+\.\d+\.\d+').Value) } -Descending
+            $urls += $found | ForEach-Object { "$base$_" }
+          } catch { Write-Host "Could not read the releases listing: $_" }
+          foreach ($u in $urls) {
+            try {
+              Write-Host "Trying $u"
+              Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile $target
+              if ((Get-Item $target).Length -gt 1MB) { Write-Host "Downloaded OK"; break }
+            } catch { Write-Host "Failed: $_" }
+          }
+          if (-not (Test-Path $target)) { Write-Host "No bundled OpenVPN installer; the setup will use winget." }
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=1.0.${{ github.run_number }}" windows/installer/moonlight.iss
+          if (-not (Test-Path windows/out/MoonlightVPN-Setup.exe)) { throw "Installer was not created" }
+
+      - name: Zip the portable folder
+        shell: pwsh
+        run: Compress-Archive -Path windows/dist/MoonlightVPN -DestinationPath windows/out/MoonlightVPN-portable.zip
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoonlightVPN-Windows-Setup
+          path: windows/out/MoonlightVPN-Setup.exe
+          if-no-files-found: error
+
+      - name: Upload portable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoonlightVPN-Windows-Portable
+          path: windows/out/MoonlightVPN-portable.zip
+          if-no-files-found: error

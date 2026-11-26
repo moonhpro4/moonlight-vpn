@@ -1,0 +1,16 @@
+*.iml
+.gradle/
+.idea/
+build/
+local.properties
+/engine/
+*.apk
+
+# Windows app build output
+/windows/assets/vpns/
+/windows/dist/
+/windows/build/
+/windows/out/
+/windows/installer/openvpn.msi
+*.spec
+__pycache__/

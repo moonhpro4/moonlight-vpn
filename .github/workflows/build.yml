@@ -1,0 +1,70 @@
+name: Build Moonlight VPN APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # GitHub's Ubuntu runners already include the Android SDK + sdkmanager,
+      # so no third-party action is needed here.
+      - name: Install SDK platforms, build-tools, NDK and CMake
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$ANDROID_HOME"           >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME"       >> "$GITHUB_ENV"
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="$(ls "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | head -n 1)"
+          fi
+          echo "Using sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install \
+            "platform-tools" \
+            "platforms;android-33" \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "ndk;27.2.12479018" \
+            "cmake;3.22.1"
+
+      - name: Download OpenVPN engine (pinned commit, no submodules)
+        run: bash scripts/fetch-engine.sh
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Generate Gradle wrapper if it is missing
+        run: |
+          if [ ! -f gradlew ]; then
+            gradle wrapper --gradle-version 8.9 --distribution-type bin
+          fi
+          chmod +x gradlew
+
+      - name: Build debug APK (retries once on a network hiccup)
+        run: |
+          ./gradlew assembleDebug --stacktrace --no-daemon \
+            || (echo "First attempt failed, retrying once..." && sleep 15 && ./gradlew assembleDebug --stacktrace --no-daemon)
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoonlightVPN-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

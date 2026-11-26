@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#14063A</color>
+    <color name="surface">#21104F</color>
+    <color name="surface_stroke">#3B2A7A</color>
+    <color name="primary">#8B5CF6</color>
+    <color name="lavender">#C4B5FD</color>
+    <color name="muted">#9A8FC4</color>
+    <color name="white">#FFFFFF</color>
+    <color name="connected">#10B981</color>
+    <color name="connecting">#F59E0B</color>
+    <color name="icon_background">#20044E</color>
+</resources>
